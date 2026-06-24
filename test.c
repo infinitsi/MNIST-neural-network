@@ -2,11 +2,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_FILE_SIZE 50000
 
 int main() {
+    printf("Math test: atan2(0,0) = %f\n", atan2(0,0));
     FILE *fptr;
     char guessList[MAX_FILE_SIZE];
     char lineBuffer[BUFFER_SIZE];
