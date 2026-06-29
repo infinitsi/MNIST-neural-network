@@ -5,7 +5,7 @@
 #include <math.h>
 #include <time.h>
 
-static uint32_t read_be32(FILE *f) {
+uint32_t read_be32(FILE *f) {
     uint32_t x;
     fread(&x, 4, 1, f);
     // byte-swap: big -> little endian
@@ -174,7 +174,7 @@ int main(void) {
     // printf("test: %u\n", inputimage[28*7 + 4]);
 
     //connection layer 1 (heap)
-    char layerpath[] = "layer1data";
+    char layerpath[] = "layer1data.bin";
     Layer *layer1 = malloc(sizeof *layer1);
     if (!layer1) { perror("layer1"); }
     //randomize model
