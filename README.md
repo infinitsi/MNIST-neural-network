@@ -1,2 +1,2 @@
 # MNIST-neural-network
-c
+layer1data.bin - stores weights and biases

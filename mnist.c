@@ -33,6 +33,9 @@ void render_image(const MnistDataset *ds, uint32_t s) {
     for (uint32_t r = 0; r < ds->rows; r++) {
         for (uint32_t c = 0; c < ds->cols; c++) {
             uint8_t px = ds->images[sz*s + r * ds->cols + c];
+            //unicode shading
+            //
+            //░░▒▒▓▓██
             const char *outchar = (px > 191 ? "\u2588\u2588" :
                             px > 128 ? "\u2593\u2593" : 
                             px > 64 ? "\u2592\u2592" :
@@ -44,15 +47,11 @@ void render_image(const MnistDataset *ds, uint32_t s) {
     }
 }
 
-float *copy_image(const MnistDataset *ds, uint32_t s) {
+void copy_image(float *dst, const MnistDataset *ds, uint32_t s) {
     uint32_t sz = ds->rows * ds->cols;
-    float *dst = malloc(sz * sizeof *dst);
-    if (!dst) return NULL;
-
     for(uint32_t n = 0; n < sz; n++) {
         dst[n] = (float)(ds->images[sz*s + n]/255.f);
     }
-    return dst;
 }
 
 typedef struct {
@@ -113,7 +112,7 @@ float sigmoid(float x) {
     return (1.f / (1.f + expf(-x)));
 }
 
-//write weights*inputs+bias to nlayer
+//write weights*inputs+bias to neuron layer
 void calc_neuronlayer(float *nlayer, Layer *l, float *inp) {
     for(uint32_t i = 0; i < l->outputct; ++i) {
         float sum = 0.0f;
@@ -170,7 +169,8 @@ int main(void) {
     //input neurons (heap)
     uint8_t inputlabel = dataSet.labels[select];
     printf("inputlabel variable so that it isnt unused: %u\n", inputlabel);
-    float *inputimage = copy_image(&dataSet, select);
+    float *inputimage = malloc(sz * sizeof *inputimage);
+    copy_image(inputimage, &dataSet, select);
     // printf("test: %u\n", inputimage[28*7 + 4]);
 
     //connection layer 1 (heap)
@@ -200,6 +200,7 @@ int main(void) {
 
     free(dataSet.labels);
     free(dataSet.images);
+
     free(inputimage);
     free(layer1->weights);
     free(layer1->biases);
