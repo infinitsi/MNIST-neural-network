@@ -24,6 +24,10 @@ typedef struct {
 } MnistDataset;
 
 void render_image(const MnistDataset *ds, uint32_t s) {
+    /* ---- access pattern ----
+       pixel (r,c) of image i:  images[i*sz + r*cols + c]
+       label of image i:        labels[i]
+    ---- */
     printf("Label: %d\n", ds->labels[s]);
     uint32_t sz = ds->rows * ds->cols;
     for (uint32_t r = 0; r < ds->rows; r++) {
@@ -40,13 +44,13 @@ void render_image(const MnistDataset *ds, uint32_t s) {
     }
 }
 
-uint8_t *copy_image(const MnistDataset *ds, uint32_t s) {
+float *copy_image(const MnistDataset *ds, uint32_t s) {
     uint32_t sz = ds->rows * ds->cols;
-    uint8_t *dst = malloc(sz);
+    float *dst = malloc(sz * sizeof *dst);
     if (!dst) return NULL;
 
     for(uint32_t n = 0; n < sz; n++) {
-        dst[n] = ds->images[sz*s + n];
+        dst[n] = (float)(ds->images[sz*s + n]/255.f);
     }
     return dst;
 }
@@ -67,8 +71,7 @@ void init_layer(Layer *l, uint32_t inct, uint32_t outct) {
 
 void randomize_weights_biases(Layer *l) {
     if(!l || !l->weights || !l->biases) return;
-    srand(time(NULL));
-    for(uint32_t i = 0; i < (l->inputct * l->outputct)/sizeof(float); ++i) {
+    for(uint32_t i = 0; i < l->inputct * l->outputct; ++i) {
         l->weights[i] = ((float)rand() / RAND_MAX) * 0.1f - 0.05f;
     }
     // for (uint32_t i = 0; i < l->outputct; ++i) {
@@ -80,16 +83,6 @@ void reset_file(const char *path) {
     FILE *p = fopen(path, "w");
     if(!p) {perror("path");}
     fclose(p);
-}
-
-void write_layer_to_file(const char *layer_path, const Layer *l) {
-    FILE *lp = fopen(layer_path, "wb");
-    if(!lp) {perror("layer path");}
-    fwrite(&l->inputct, sizeof(uint32_t), 1, lp);
-    fwrite(&l->outputct, sizeof(uint32_t), 1, lp);
-    fwrite(l->weights, sizeof(float), l->inputct * l->outputct, lp);
-    fwrite(l->biases, sizeof(float), l->outputct, lp);
-    fclose(lp);
 }
 
 void read_file_to_layer(const char *layer_path, Layer *l) {
@@ -105,9 +98,37 @@ void read_file_to_layer(const char *layer_path, Layer *l) {
     fclose(lp);
 }
 
+void write_layer_to_file(const char *layer_path, const Layer *l) {
+    FILE *lp = fopen(layer_path, "wb");
+    if(!lp) {perror("layer path");}
+    fwrite(&l->inputct, sizeof(uint32_t), 1, lp);
+    fwrite(&l->outputct, sizeof(uint32_t), 1, lp);
+    fwrite(l->weights, sizeof(float), l->inputct * l->outputct, lp);
+    fwrite(l->biases, sizeof(float), l->outputct, lp);
+    fclose(lp);
+}
+
+//sigmoid
+float sigmoid(float x) {
+    return (1.f / (1.f + expf(-x)));
+}
+
+//write weights*inputs+bias to nlayer
+void calc_neuronlayer(float *nlayer, Layer *l, float *inp) {
+    for(uint32_t i = 0; i < l->outputct; ++i) {
+        float sum = 0.0f;
+        for(uint32_t j = 0; j < l->inputct; ++j) {
+            sum += l->weights[i*l->inputct + j] * inp[j];
+        }
+        nlayer[i] = sigmoid(sum + l->biases[i]);
+        //test for neurons
+        printf("neuron %u: %f\n", i, nlayer[i]);
+    }
+}
+
 int main(void) {
     MnistDataset dataSet;
-    /* ---- labels ---- */
+    //labels (heap)
     FILE *lf = fopen("train-labels.idx1-ubyte", "rb");
     if (!lf) { perror("labels"); return 1; }
 
@@ -119,7 +140,7 @@ int main(void) {
     fread(dataSet.labels, 1, n, lf);
     fclose(lf);
 
-    /* ---- images ---- */
+    //images (heap)
     FILE *imf = fopen("train-images.idx3-ubyte", "rb");
     if (!imf) { perror("images"); return 1; }
 
@@ -135,36 +156,54 @@ int main(void) {
     fread(dataSet.images, 1, dataSet.count * sz, imf);
     fclose(imf);
 
-    /* ---- access pattern ----
-       pixel (r,c) of image i:  images[i*sz + r*cols + c]
-       label of image i:        labels[i]
-    ---- */
     // sanity check
     if (dataSet.count != n) fprintf(stderr, "warn: image count %u != label count %u\n", dataSet.count, n);
 
-    uint32_t select = -1;
-    while(select < 0 || select >= dataSet.count) {
+    //test render
+    uint32_t select = 60000;
+    while(select >= dataSet.count) {
         printf("Selected image (0-59999): ");
         scanf("%u",&select);
     }
     render_image(&dataSet, select);
 
-    uint8_t *single = copy_image(&dataSet, select);
-    printf("test: %u\n", single[28*7 + 4]);
+    //input neurons (heap)
+    uint8_t inputlabel = dataSet.labels[select];
+    printf("inputlabel variable so that it isnt unused: %u\n", inputlabel);
+    float *inputimage = copy_image(&dataSet, select);
+    // printf("test: %u\n", inputimage[28*7 + 4]);
 
-    char layerpath[] = "layerfile";
+    //connection layer 1 (heap)
+    char layerpath[] = "layer1data";
     Layer *layer1 = malloc(sizeof *layer1);
+    if (!layer1) { perror("layer1"); }
+    //randomize model
     // init_layer(layer1, sz, 6);
+    // srand((unsigned)time(NULL));
     // randomize_weights_biases(layer1);
+
+    //read to model
     read_file_to_layer(layerpath, layer1);
+
+    // test weights
+    // for(uint32_t i = 0; i < layer1->inputct*layer1->outputct; ++i) {
+    //     printf("%f\n",layer1->weights[i]);
+    // }
+
+    //neuron layer 1 (stack)
+    float *nlayer1 = calloc(layer1->outputct, sizeof *nlayer1);
+    if (!nlayer1) { perror("nlayer1"); }
+    calc_neuronlayer(nlayer1, layer1, inputimage);
+
+    //save
     write_layer_to_file(layerpath, layer1);
 
-
-
-    free(dataSet.images);
     free(dataSet.labels);
+    free(dataSet.images);
+    free(inputimage);
     free(layer1->weights);
     free(layer1->biases);
     free(layer1);
+    free(nlayer1);
     return 0;
 }
