@@ -16,6 +16,20 @@ uint32_t read_be32(FILE *f) {
            ((x & 0x000000FF) << 24);
 }
 
+void shuffle(uint32_t *array, size_t n) {
+    if (n > 1) {
+        for (size_t i = n - 1; i > 0; i--) {
+            // Pick a random index from 0 to i
+            size_t j = (size_t)rand() % (i + 1);
+            
+            // Swap array[i] and array[j]
+            uint32_t temp = array[i];
+            array[i] = array[j];
+            array[j] = temp;
+        }
+    }
+}
+
 typedef struct {
     uint8_t *images;
     uint8_t *labels;
@@ -62,6 +76,7 @@ typedef struct {
     float *biases;  // length = outputct
 } Layer;
 
+//uses calloc for l->weights and l->biases
 void init_layer(Layer *l, uint32_t inct, uint32_t outct) {
     l->inputct = inct;
     l->outputct = outct;
@@ -69,20 +84,14 @@ void init_layer(Layer *l, uint32_t inct, uint32_t outct) {
     l->biases = calloc(outct, sizeof(float));
 }
 
-void randomize_params(Layer *l) {
+void randomize_params(Layer *l, float range) {
     if(!l || !l->weights || !l->biases) return;
     for(uint32_t i = 0; i < l->inputct * l->outputct; ++i) {
-        l->weights[i] = ((float)rand() / RAND_MAX) * 0.3f - 0.15f;
+        l->weights[i] = ((float)rand() / RAND_MAX) * range - range/2.0f;
     }
     // for (uint32_t i = 0; i < l->outputct; ++i) {
     //     l->biases[i] = 0.0f;
     // }
-}
-
-void reset_file(const char *path) {
-    FILE *p = fopen(path, "w");
-    if(!p) {perror("path");}
-    fclose(p);
 }
 
 void read_file_to_layer(const char *layer_path, Layer *l) {
@@ -116,28 +125,26 @@ float reLU(float x) { return fmax(0.0,x); }
 
 float dreLU(float x) { return x > 0.0f ? 1.0f : 0.0f; }
 
-//write weights*inputs+bias to neuron layer
-void calc_neurons(float *neurons, float *preactivation_neurons, Layer *l, float *inp) {
+void calc_neurons(float *neurons, float *preactivation_neurons, Layer *l, float *inp, char use_sigmoid) {
     for(uint32_t i = 0; i < l->outputct; ++i) {
         float sum = 0.0f;
         for(uint32_t j = 0; j < l->inputct; ++j) {
             sum += l->weights[i*l->inputct + j] * inp[j];
         }
-        if(!preactivation_neurons) {
-            neurons[i] = reLU(sum + l->biases[i]);
-        } else {
-            preactivation_neurons[i] = sum + l->biases[i];
-            neurons[i] = reLU(preactivation_neurons[i]);
+        float z = sum + l->biases[i];
+        if(preactivation_neurons) {
+            preactivation_neurons[i] = z;
         }
+        neurons[i] = use_sigmoid ? sigmoid(z) : reLU(z);
     }
 }
 
 float calc_cost(uint8_t label, float *neuron0, Layer *l1, Layer *l2) {
     //neuron0 (input) --l1--> neuron1 --l2--> neuron2 (output) --label--> cost
     float neuron1[l1->outputct];
-    calc_neurons(neuron1, NULL, l1, neuron0);
+    calc_neurons(neuron1, NULL, l1, neuron0, (char)0);
     float neuron2[l2->outputct];
-    calc_neurons(neuron2, NULL, l2, neuron1);
+    calc_neurons(neuron2, NULL, l2, neuron1, (char)1);
 
     float sum = 0.0f;
     for(uint32_t i = 0; i < l2->outputct; ++i) {
@@ -154,10 +161,10 @@ void calc_gradient(Layer *dl1, Layer *dl2, float *neuron0, Layer *l1, Layer *l2,
     //
     float pre1[l1->outputct];
     float neuron1[l1->outputct];
-    calc_neurons(neuron1, pre1, l1, neuron0);
+    calc_neurons(neuron1, pre1, l1, neuron0, (char)0);
     float pre2[l2->outputct];
     float neuron2[l2->outputct];
-    calc_neurons(neuron2, pre2, l2, neuron1);
+    calc_neurons(neuron2, pre2, l2, neuron1, (char)1);
     //dc/da_j(L) or dcost/dneuron2
     float dn2[l2->outputct];
     float y;
@@ -167,7 +174,7 @@ void calc_gradient(Layer *dl1, Layer *dl2, float *neuron0, Layer *l1, Layer *l2,
     }
     //dc/db_j(L) or dcost/dbias2
     for(uint32_t i = 0; i < l2->outputct; ++i) {
-        dl2->biases[i] = dreLU(pre2[i]) * dn2[i];
+        dl2->biases[i] = dsigmoid(pre2[i]) * dn2[i];
     }
     //dc/dw_jk(L) or dcost/dweights2
     //j for neuron2, k for neuron1
@@ -181,7 +188,7 @@ void calc_gradient(Layer *dl1, Layer *dl2, float *neuron0, Layer *l1, Layer *l2,
     for(uint32_t k = 0; k < l2->inputct; ++k) {
         float sum = 0;
         for(uint32_t j = 0; j < l2->outputct; ++j) {
-            sum += l2->weights[j*l2->inputct + k] * dreLU(pre2[j]) * dn2[j];
+            sum += l2->weights[j*l2->inputct + k] * dsigmoid(pre2[j]) * dn2[j];
         }
         dn1[k] = sum;
     }
@@ -197,7 +204,6 @@ void calc_gradient(Layer *dl1, Layer *dl2, float *neuron0, Layer *l1, Layer *l2,
         }
     }
 }
-
 
 void add_gradient(Layer *dl1, Layer *dl2, Layer *dl1t, Layer *dl2t) {
     for (uint32_t j = 0; j < dl1->outputct; ++j) {
@@ -295,18 +301,24 @@ int main(void) {
     read_file_to_layer(layer2path, &layer2);
 
     //randomize parameters
-    // srand((unsigned)time(NULL));
-    // init_layer(&layer1, sz, 6);
+    srand((unsigned)time(NULL));
+    // init_layer(&layer1, sz, 15);
     // init_layer(&layer2, layer1.outputct, 10);
-    // randomize_params(&layer1);
-    // randomize_params(&layer2);
+    // randomize_params(&layer1, sqrtf(6.0f/layer1.inputct));
+    // randomize_params(&layer2, sqrtf(6.0f/layer2.inputct));
 
 
     /*  gradient descent */
+    //training setup
     uint32_t batchsize = 10;
-    uint32_t batches = 6000;
-    float lr = 0.1f; //learning rate
+    uint32_t batches = dataSet.count / batchsize;
+    float lr = 0.01f; //learning rate
     float avg_cost;
+    //image order
+    uint32_t *order = malloc(dataSet.count * sizeof(uint32_t));
+    for(uint32_t i = 0; i < dataSet.count; ++i) order[i] = i;
+    shuffle(order, dataSet.count);
+
     Layer layer1gradient;
     Layer layer2gradient;
     init_layer(&layer1gradient, layer1.inputct, layer1.outputct);
@@ -328,43 +340,49 @@ int main(void) {
         memset(layer2gradient.weights, 0, layer2.inputct*layer2.outputct*sizeof(float));
         memset(layer2gradient.biases,  0, layer2.outputct*sizeof(float));
         for(uint32_t select = batchnum*batchsize; select < (batchnum+1)*batchsize; ++select) {
+            uint32_t idx = order[select];
             //input setup
-            inputlabel = dataSet.labels[select];
+            inputlabel = dataSet.labels[idx];
             //printf("Label: %u\n", inputlabel); //show labels
-            copy_image(neuron0, &dataSet, select);
+            copy_image(neuron0, &dataSet, idx);
             //cost and gradient
             avg_cost += calc_cost(inputlabel, neuron0, &layer1, &layer2);
             calc_gradient(&temp1, &temp2, neuron0, &layer1, &layer2, inputlabel);
-            //test gradient
-            // printf("w: %f, ", layer1.weights[408]);
-            // printf("dc/dw: %f\n", temp1.weights[408]);
             //add to total gradient
             add_gradient(&layer1gradient, &layer2gradient, &temp1, &temp2);
         }
         //average cost
         avg_cost /= batchsize;
-        // printf("Average cost: %f\n", avg_cost);
+        //printf("Average cost batch %u: %f\n", batchnum, avg_cost);
         //update layers
         update_params(&layer1, &layer2, &layer1gradient, &layer2gradient, lr/batchsize);
     }
-    printf("Average cost: %f\n", avg_cost);
+    printf("Average cost final: %f\n", avg_cost);
 
     //save
     write_layer_to_file(layer1path, &layer1);
     write_layer_to_file(layer2path, &layer2);
 
+
+
+
+
+
     free(dataSet.labels);
     free(dataSet.images);
 
     free(neuron0);
+
     free(layer1.weights);
     free(layer1.biases);
     free(layer2.weights);
     free(layer2.biases);
+
     free(layer1gradient.weights);
     free(layer1gradient.biases);
     free(layer2gradient.weights);
     free(layer2gradient.biases);
+
     free(temp1.weights);
     free(temp1.biases);
     free(temp2.weights);
