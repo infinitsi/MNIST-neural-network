@@ -68,10 +68,10 @@ void init_layer(Layer *l, uint32_t inct, uint32_t outct) {
     l->biases = calloc(outct, sizeof(float));
 }
 
-void randomize_weights_biases(Layer *l) {
+void randomize_params(Layer *l) {
     if(!l || !l->weights || !l->biases) return;
     for(uint32_t i = 0; i < l->inputct * l->outputct; ++i) {
-        l->weights[i] = ((float)rand() / RAND_MAX) * 0.1f - 0.05f;
+        l->weights[i] = ((float)rand() / RAND_MAX) * 0.3f - 0.15f;
     }
     // for (uint32_t i = 0; i < l->outputct; ++i) {
     //     l->biases[i] = 0.0f;
@@ -107,22 +107,53 @@ void write_layer_to_file(const char *layer_path, const Layer *l) {
     fclose(lp);
 }
 
-//sigmoid
 float sigmoid(float x) {
     return (1.f / (1.f + expf(-x)));
 }
 
+float reLU(float x) {
+    return fmax(0.0,x);
+}
+
 //write weights*inputs+bias to neuron layer
-void calc_neuronlayer(float *nlayer, Layer *l, float *inp) {
+void calc_neuronlayer(float *neurons, Layer *l, float *inp) {
     for(uint32_t i = 0; i < l->outputct; ++i) {
         float sum = 0.0f;
         for(uint32_t j = 0; j < l->inputct; ++j) {
             sum += l->weights[i*l->inputct + j] * inp[j];
         }
-        nlayer[i] = sigmoid(sum + l->biases[i]);
-        //test for neurons
-        printf("neuron %u: %f\n", i, nlayer[i]);
+        neurons[i] = sigmoid(sum + l->biases[i]);
     }
+}
+
+// float calc_cost(uint8_t label, float *outputs, uint32_t outputct) {
+//     float sum = 0.0f;
+//     for(uint32_t i = 0; i < outputct; ++i) {
+//         if(i == label-1) {
+//             sum += (outputs[i]-1)*(outputs[i]-1);
+//         } else {
+//             sum += outputs[i]*outputs[i];
+//         }
+//     }
+//     return sum;
+// }
+
+float calc_cost(uint8_t label, float *neuron0, Layer *l1, Layer *l2) {
+    //neuron0 (input) --l1--> neuron1 --l2--> neuron2 (output) --label--> cost
+    float neuron1[l1->outputct];
+    calc_neuronlayer(neuron1, l1, neuron0);
+    float neuron2[l2->outputct];
+    calc_neuronlayer(neuron2, l2, neuron1);
+
+    float sum = 0.0f;
+    for(uint32_t i = 0; i < l2->outputct; ++i) {
+        if(i == label-1) {
+            sum += (neuron2[i]-1)*(neuron2[i]-1);
+        } else {
+            sum += neuron2[i]*neuron2[i];
+        }
+    }
+    return sum;
 }
 
 int main(void) {
@@ -166,45 +197,59 @@ int main(void) {
     }
     render_image(&dataSet, select);
 
-    //input neurons (heap)
+
+
+
+
+    /* neural network */
+
+    //image label
     uint8_t inputlabel = dataSet.labels[select];
-    printf("inputlabel variable so that it isnt unused: %u\n", inputlabel);
-    float *inputimage = malloc(sz * sizeof *inputimage);
-    copy_image(inputimage, &dataSet, select);
-    // printf("test: %u\n", inputimage[28*7 + 4]);
+    //neuron layer 0 - input (heap)
+    float *neuron0 = malloc(sz * sizeof *neuron0);
+    copy_image(neuron0, &dataSet, select);
+    // printf("test: %u\n", neuron0[28*7 + 4]);
 
     //connection layer 1 (heap)
-    char layerpath[] = "layer1data.bin";
+    char layer1path[] = "layer1data.bin";
     Layer *layer1 = malloc(sizeof *layer1);
     if (!layer1) { perror("layer1"); }
-    //randomize model
+    //randomize parameters
     // init_layer(layer1, sz, 6);
     // srand((unsigned)time(NULL));
-    // randomize_weights_biases(layer1);
+    // randomize_params(layer1);
+    //read parameters from file
+    read_file_to_layer(layer1path, layer1);
 
-    //read to model
-    read_file_to_layer(layerpath, layer1);
+    //connection layer 2 (heap)
+    char layer2path[] = "layer2data.bin";
+    Layer *layer2 = malloc(sizeof *layer2);
+    if (!layer2) { perror("layer2"); }
+    //randomize parameters
+    // srand((unsigned)time(NULL));
+    // init_layer(layer2, layer1->outputct, 10);
+    // randomize_params(layer2);
+    //read parameters from file
+    read_file_to_layer(layer2path, layer2);
 
-    // test weights
-    // for(uint32_t i = 0; i < layer1->inputct*layer1->outputct; ++i) {
-    //     printf("%f\n",layer1->weights[i]);
-    // }
+    printf("Cost: %f\n", calc_cost(inputlabel, neuron0, layer1, layer2));
 
-    //neuron layer 1 (stack)
-    float *nlayer1 = calloc(layer1->outputct, sizeof *nlayer1);
-    if (!nlayer1) { perror("nlayer1"); }
-    calc_neuronlayer(nlayer1, layer1, inputimage);
+
+
 
     //save
-    write_layer_to_file(layerpath, layer1);
+    write_layer_to_file(layer1path, layer1);
+    write_layer_to_file(layer2path, layer2);
 
     free(dataSet.labels);
     free(dataSet.images);
 
-    free(inputimage);
+    free(neuron0);
     free(layer1->weights);
     free(layer1->biases);
     free(layer1);
-    free(nlayer1);
+    free(layer2->weights);
+    free(layer2->biases);
+    free(layer2);
     return 0;
 }
